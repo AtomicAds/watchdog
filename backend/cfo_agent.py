@@ -34,11 +34,28 @@ def get_secret(key: str, default: str = None) -> str:
         pass
     return os.getenv(key, default)
 
+# Try new google-genai package first, fall back to deprecated one
 try:
-    import google.generativeai as genai
+    from google import genai
     GEMINI_AVAILABLE = True
+    GEMINI_NEW_API = True
 except ImportError:
-    GEMINI_AVAILABLE = False
+    try:
+        import google.generativeai as genai
+        GEMINI_AVAILABLE = True
+        GEMINI_NEW_API = False
+    except ImportError:
+        GEMINI_AVAILABLE = False
+        GEMINI_NEW_API = False
+
+# Preferred models in order (best first, fallbacks after)
+PREFERRED_MODELS = [
+    "gemini-2.5-flash",      # Latest, best performance
+    "gemini-2.5-pro",        # Pro version
+    "gemini-2.0-flash",      # Previous gen
+    "gemini-2.0-flash-lite", # Lite version
+    "gemini-flash-latest",   # Generic latest
+]
 
 
 class CFOAgent:
@@ -46,16 +63,48 @@ class CFOAgent:
     
     def __init__(self, api_key: str = None):
         self.api_key = api_key or get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
+        self.client = None
         self.model = None
         self.reasoning_steps = []
         
         if GEMINI_AVAILABLE and self.api_key:
             try:
-                genai.configure(api_key=self.api_key)
-                self.model = genai.GenerativeModel('gemini-1.5-flash')
+                if GEMINI_NEW_API:
+                    # New google-genai package
+                    self.client = genai.Client(api_key=self.api_key)
+                    # Find the best available model
+                    self.model = self._find_best_model()
+                else:
+                    # Old deprecated package
+                    genai.configure(api_key=self.api_key)
+                    self.model = genai.GenerativeModel('gemini-1.5-flash')
             except Exception as e:
                 print(f"Warning: Could not initialize Gemini: {e}")
+                self.client = None
                 self.model = None
+    
+    def _find_best_model(self) -> str:
+        """Find the best available model by testing each one."""
+        if not self.client:
+            return None
+        
+        for model_name in PREFERRED_MODELS:
+            try:
+                # Quick test to see if model works
+                response = self.client.models.generate_content(
+                    model=model_name,
+                    contents="Hi"
+                )
+                if response and response.text:
+                    print(f"Using model: {model_name}")
+                    return model_name
+            except Exception as e:
+                # Model not available or rate limited, try next
+                continue
+        
+        # No model worked, return default (will use fallback narrative)
+        print("Warning: No Gemini model available, using template narrative")
+        return None
     
     def _log_step(self, step: str) -> dict:
         """Log a reasoning step."""
@@ -137,7 +186,7 @@ class CFOAgent:
     
     def _generate_narrative_with_llm(self, findings: List[dict], financial_risk: dict) -> str:
         """Generate a scary CFO narrative using Gemini."""
-        if not self.model:
+        if not self.model or (GEMINI_NEW_API and not self.client):
             return self._generate_fallback_narrative(findings, financial_risk)
         
         # Prepare the prompt
@@ -165,8 +214,19 @@ Focus on: What's broken, how much money is being wasted, and what happens if we 
 Do NOT use bullet points. Write in prose. Be dramatic but factual."""
 
         try:
-            response = self.model.generate_content(prompt)
-            return response.text.strip()
+            if GEMINI_NEW_API and self.client:
+                # New google-genai API
+                response = self.client.models.generate_content(
+                    model=self.model,
+                    contents=prompt
+                )
+                return response.text.strip()
+            elif self.model:
+                # Old deprecated API
+                response = self.model.generate_content(prompt)
+                return response.text.strip()
+            else:
+                return self._generate_fallback_narrative(findings, financial_risk)
         except Exception as e:
             print(f"LLM Error: {e}")
             return self._generate_fallback_narrative(findings, financial_risk)
@@ -221,10 +281,12 @@ Every hour of inaction compounds the waste. This requires {urgency}.
         # Generate narrative
         yield self._log_step("✍️ Generating executive narrative...")
         
-        if self.model:
-            yield self._log_step("   Using Gemini AI for narrative generation...")
+        if self.model and self.client:
+            yield self._log_step(f"   🤖 Using Gemini AI ({self.model})...")
+        elif self.model:
+            yield self._log_step(f"   🤖 Using Gemini AI ({self.model})...")
         else:
-            yield self._log_step("   Using template-based narrative (no API key configured)...")
+            yield self._log_step("   📝 Using template-based narrative (no API key configured)...")
         
         narrative = self._generate_narrative_with_llm(findings, financial_risk)
         
