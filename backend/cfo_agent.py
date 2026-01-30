@@ -12,6 +12,27 @@ import os
 from datetime import datetime
 from typing import List, Generator
 import json
+from pathlib import Path
+
+# Load .env file
+try:
+    from dotenv import load_dotenv
+    # Load from project root
+    env_path = Path(__file__).parent.parent / ".env"
+    load_dotenv(env_path)
+except ImportError:
+    pass
+
+# Also try to load from Streamlit secrets (for cloud deployment)
+def get_secret(key: str, default: str = None) -> str:
+    """Get secret from Streamlit secrets or environment."""
+    try:
+        import streamlit as st
+        if hasattr(st, 'secrets') and key in st.secrets:
+            return st.secrets[key]
+    except:
+        pass
+    return os.getenv(key, default)
 
 try:
     import google.generativeai as genai
@@ -24,7 +45,7 @@ class CFOAgent:
     """Agent that uses LLM to generate executive-level risk narratives."""
     
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        self.api_key = api_key or get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
         self.model = None
         self.reasoning_steps = []
         
@@ -77,20 +98,40 @@ class CFOAgent:
         """
         Calculate account health score (0-100).
         100 = Perfect health, 0 = Complete disaster
+        
+        Uses a percentage-based weighted formula:
+        - P0 issues count as 3x weight
+        - P1 issues count as 2x weight
+        - P2 issues count as 1x weight
+        
+        Score = 100 - (weighted_error_rate * 100)
         """
         if total_records == 0:
             return 100
         
-        # Deduct points based on issues
+        # Count issues by priority
         p0_count = len([f for f in findings if f.get('priority') == 'P0'])
         p1_count = len([f for f in findings if f.get('priority') == 'P1'])
         p2_count = len([f for f in findings if f.get('priority') == 'P2'])
         
-        # P0 = -10 points each, P1 = -5 points each, P2 = -2 points each
-        deductions = (p0_count * 10) + (p1_count * 5) + (p2_count * 2)
+        # Calculate weighted error count (P0 = 3x, P1 = 2x, P2 = 1x)
+        weighted_errors = (p0_count * 3) + (p1_count * 2) + (p2_count * 1)
         
-        # Cap deductions at 100
-        score = max(0, 100 - deductions)
+        # Max possible weighted errors (if all records were P0)
+        max_weighted_errors = total_records * 3
+        
+        # Calculate error rate (0 to 1)
+        error_rate = weighted_errors / max_weighted_errors if max_weighted_errors > 0 else 0
+        
+        # Apply a curve to make the score more meaningful
+        # Using inverse exponential: more sensitive to small error rates
+        import math
+        # Score decreases faster initially, then slows down
+        # This ensures even small issues affect the score visibly
+        score = int(100 * math.exp(-3 * error_rate))
+        
+        # Ensure score is between 0 and 100
+        score = max(0, min(100, score))
         
         return score
     
