@@ -1,0 +1,204 @@
+{
+  "node": "Pixel created",
+  "instruction": "Navigate on DV360: Advertiser level -> Resources -> Floodlight group -> Floodlight activities -> Floodlight activity names",
+  "branches": [
+    {
+      "condition": "No",
+      "next_step": {
+        "node": "Give instructions for user to create pixel",
+        "instruction": null,
+        "branches": [],
+        "type": "action_or_leaf"
+      }
+    },
+    {
+      "condition": "Yes",
+      "next_step": {
+        "node": "Pixel firing",
+        "instruction": "Navigate on DV360: Reports -> instant & offline -> offline -> new offline -> floodlight report -> enter (Floodlight activity name, date, imporessions)",
+        "branches": [
+          {
+            "condition": "No",
+            "next_step": {
+              "node": "Navigate DV360: Cookie consented == 0 and Cookie unconsented == 0",
+              "instruction": "Give instruction for user to correct cookie policy",
+              "branches": [
+                {
+                  "condition": "Navigate DV360: Cookie consented > 0 and Cookie unconsented == 0",
+                  "next_step": {
+                    "node": "Give instruction to user saying pixel is not placed or not placed properly",
+                    "instruction": null,
+                    "branches": [],
+                    "type": "action_or_leaf"
+                  }
+                },
+                {
+                  "condition": "GTM linked",
+                  "next_step": {
+                    "node": "Navigate on GTM: Floodlight group -> basic details -> GTM account ",
+                    "instruction": null,
+                    "branches": [],
+                    "type": "action_or_leaf"
+                  }
+                },
+                {
+                  "condition": "No",
+                  "next_step": {
+                    "node": "GTM can be accessed",
+                    "instruction": null,
+                    "branches": [
+                      {
+                        "condition": "Yes",
+                        "next_step": {
+                          "node": "Give instructions for user to place pixel(floodlight) on GTM & publish",
+                          "instruction": null,
+                          "branches": [],
+                          "type": "action_or_leaf"
+                        }
+                      },
+                      {
+                        "condition": "No",
+                        "next_step": {
+                          "node": "Give instructions for user to place pixel(floodlight) directly on the webisite",
+                          "instruction": null,
+                          "branches": [],
+                          "type": "action_or_leaf"
+                        }
+                      }
+                    ]
+                  }
+                },
+                {
+                  "condition": "Yes",
+                  "next_step": {
+                    "node": "Match Advertiser id on GTM &  Floodlight id on DV360",
+                    "instruction": "Navigate on GTM: Tags -> pixels(floodlight) -> advertiser id exists AND Navigate on DV360: Floodlight activities -> Floodlight name -> Code -> Floodlight id",
+                    "branches": [
+                      {
+                        "condition": "No",
+                        "next_step": {
+                          "node": "Give instructions for user to place pixel (floodlight) in GTM & publish",
+                          "instruction": null,
+                          "branches": [],
+                          "type": "action_or_leaf"
+                        }
+                      },
+                      {
+                        "condition": "Yes",
+                        "next_step": {
+                          "node": "Match group (tag string of GTM AND type of DV360) AND (activities tag string of GTM AND cat of DV360) AND counting methods (unique, standard, session) AND consent settings (add storage, add personalized, add user update)",
+                          "instruction": null,
+                          "branches": [
+                            {
+                              "condition": "No",
+                              "next_step": {
+                                "node": "Give instruction for user to correct the settings",
+                                "instruction": null,
+                                "branches": [],
+                                "type": "action_or_leaf"
+                              }
+                            },
+                            {
+                              "condition": "Yes",
+                              "next_step": {
+                                "node": "Match trigger event name on GTM & website",
+                                "instruction": "Navigate on GTM: published -> versions -> live -> floodlight name",
+                                "branches": [
+                                  {
+                                    "condition": "No",
+                                    "next_step": {
+                                      "node": "Give instriuction for user to correct event name on website",
+                                      "instruction": null,
+                                      "branches": [],
+                                      "type": "action_or_leaf"
+                                    }
+                                  },
+                                  {
+                                    "condition": "Yes",
+                                    "next_step": {
+                                      "node": "Check advertiser id on network tab of website if the network call is blocked",
+                                      "instruction": null,
+                                      "branches": [
+                                        {
+                                          "condition": "No",
+                                          "next_step": {
+                                            "node": "Nothing to do. May be there is delay. ",
+                                            "instruction": null,
+                                            "branches": [],
+                                            "type": "action_or_leaf"
+                                          }
+                                        },
+                                        {
+                                          "condition": "Yes",
+                                          "next_step": {
+                                            "node": "Give instruction for user to ask advertiser to allow that network call",
+                                            "instruction": null,
+                                            "branches": [],
+                                            "type": "action_or_leaf"
+                                          }
+                                        }
+                                      ]
+                                    }
+                                  }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "condition": "Yes",
+            "next_step": {
+              "node": "Check GA4 connected",
+              "instruction": null,
+              "branches": [
+                {
+                  "condition": "No",
+                  "next_step": {
+                    "node": "Give instruction for user to connect GA4 explaining that we need source of trutch to compare impressions",
+                    "instruction": null,
+                    "branches": [],
+                    "type": "action_or_leaf"
+                  }
+                },
+                {
+                  "condition": "Yes",
+                  "next_step": {
+                    "node": "Compare if DV360 & GA4 impression data have more than 25% diff",
+                    "instruction": "Navigate on GA4: reports -> events (dimension), total users (metrics), date, tag -> Firing number",
+                    "branches": [
+                      {
+                        "condition": "No",
+                        "next_step": {
+                          "node": "Give impressions data for user with source channel of the impressions on GA4 (orgnaic, direct, media channel, referal)",
+                          "instruction": null,
+                          "branches": [],
+                          "type": "action_or_leaf"
+                        }
+                      },
+                      {
+                        "condition": "Yes",
+                        "next_step": {
+                          "node": "Give instruction for user to check dedupe of pixels placed on website",
+                          "instruction": null,
+                          "branches": [],
+                          "type": "action_or_leaf"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

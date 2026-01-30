@@ -1,0 +1,24 @@
+# Backend
+fastapi>=0.109.0
+uvicorn>=0.27.0
+pydantic>=2.0.0
+
+# Frontend
+streamlit>=1.31.0
+
+# Data Processing
+pandas>=2.2.0
+numpy>=1.26.0
+
+# LLM - Google Gemini (free tier)
+google-generativeai>=0.3.0
+
+# Environment
+python-dotenv>=1.0.0
+
+# HTTP Client (for API calls)
+requests>=2.31.0
+httpx>=0.26.0
+
+# Async support
+aiofiles>=23.2.0
