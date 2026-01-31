@@ -12,16 +12,16 @@ try:
     from dotenv import load_dotenv
     env_path = Path(__file__).parent.parent / ".env"
     if env_path.exists():
-        load_dotenv(env_path)
+        load_dotenv(dotenv_path=env_path, override=True)
 except:
     pass
 
 # Preferred models in order
 PREFERRED_MODELS = [
-    "gemini-2.5-flash",
-    "gemini-2.5-pro", 
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "models/gemini-flash-latest", # Generic alias
+    "models/gemini-pro-latest",
+    "models/gemini-exp-1206", # Experimental Flash 2.0
+    "models/gemini-2.5-flash", 
 ]
 
 
@@ -39,16 +39,18 @@ def get_secret(key: str, default: str = None) -> str:
 
 
 def get_genai_client(api_key: str):
-    """Lazy load the genai client."""
-    try:
-        from google import genai
-        return genai.Client(api_key=api_key), True
-    except ImportError:
-        pass
-    except Exception as e:
-        print(f"Error initializing google-genai: {e}")
-    
-    # Try old package
+    """Lazy load the AI client (Groq or Gemini)."""
+    # Try Groq first if available
+    if api_key.startswith("gsk_"):
+        try:
+            from groq import Groq
+            return Groq(api_key=api_key), "groq"
+        except ImportError:
+            print("❌ Groq library not installed. Run `pip install groq`.")
+        except Exception as e:
+            print(f"❌ Error initializing Groq: {e}")
+            
+    # Try old package (google-generativeai) first as it is more stable for API keys
     try:
         import google.generativeai as genai
         genai.configure(api_key=api_key)
@@ -58,6 +60,15 @@ def get_genai_client(api_key: str):
     except Exception as e:
         print(f"Error initializing google.generativeai: {e}")
     
+    # Try new package (google-genai)
+    try:
+        from google import genai
+        return genai.Client(api_key=api_key), True
+    except ImportError:
+        pass
+    except Exception as e:
+        print(f"Error initializing google-genai: {e}")
+    
     return None, False
 
 
@@ -65,9 +76,9 @@ class CFOAgent:
     """Agent that uses LLM to generate executive-level risk narratives."""
     
     def __init__(self, api_key: str = None):
-        self.api_key = api_key or get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
+        self.api_key = api_key or get_secret("GROQ_API_KEY") or get_secret("GEMINI_API_KEY") or get_secret("GOOGLE_API_KEY")
         self.client = None
-        self.is_new_api = False
+        self.client_type = None  # 'groq', 'gemini_new', 'gemini_old'
         self.model = PREFERRED_MODELS[0] if PREFERRED_MODELS else None
         self.reasoning_steps = []
         self._initialized = False
@@ -79,7 +90,12 @@ class CFOAgent:
         self._initialized = True
         
         if self.api_key:
-            self.client, self.is_new_api = get_genai_client(self.api_key)
+            self.client, self.client_type = get_genai_client(self.api_key)
+            if not self.client:
+                print("❌ CFO Agent: Failed to initialize AI client.")
+                print(f"✅ CFO Agent: Initialized client (Type: {self.client_type})")
+                if self.client_type == "groq":
+                    self.model = "llama-3.1-8b-instant"
     
     def _log_step(self, step: str) -> dict:
         """Log a reasoning step."""
@@ -141,10 +157,28 @@ class CFOAgent:
         
         if not self.client:
             return None
-        
+            
+        if self.client_type == "groq":
+             # Use Groq
+             try:
+                 chat_completion = self.client.chat.completions.create(
+                     messages=[
+                         {"role": "system", "content": "You are a CFO Risk Auditor. Be concise and dramatic."},
+                         {"role": "user", "content": prompt}
+                     ],
+                     model="llama-3.1-8b-instant",
+                     temperature=0.7,
+                 )
+                 self.model = "groq-llama-3.1"
+                 return chat_completion.choices[0].message.content
+             except Exception as e:
+                 print(f"❌ Groq Error: {e}")
+                 return None
+
+        # GEMINI Logic
         for model_name in PREFERRED_MODELS:
             try:
-                if self.is_new_api:
+                if self.client_type == True: # is_new_api
                     response = self.client.models.generate_content(
                         model=model_name,
                         contents=prompt
@@ -159,13 +193,14 @@ class CFOAgent:
                     if response and response.text:
                         self.model = model_name
                         return response.text.strip()
-            except Exception as e:
-                continue
+            except Exception:
+                 # Silently continue to next model on error (e.g. 429, 404)
+                 continue
         
         return None
     
-    def _generate_narrative(self, findings: List[dict], financial_risk: dict) -> str:
-        """Generate narrative using LLM or fallback to template."""
+    def _generate_narrative(self, findings: List[dict], financial_risk: dict, batch_id: int = None, batch_size: int = None) -> tuple[str, bool]:
+        """Generate narrative using LLM or fallback to template. Returns (text, used_fallback)."""
         # Prepare prompt
         top_findings = findings[:5]
         findings_text = "\n".join([
@@ -174,8 +209,12 @@ class CFOAgent:
             for f in top_findings
         ])
         
+        batch_context = f"IN BATCH #{batch_id} ({batch_size} RECORDS)" if batch_id else "IN THIS AUDIT"
+        
         prompt = f"""You are a ruthless CFO reviewing an ad tech account audit. 
 Explain why these issues are burning cash and demand immediate action.
+
+CONTEXT: {batch_context}
 
 FINANCIAL RISK:
 - Daily spend at risk: ${financial_risk['daily_spend_at_risk']:,.2f}
@@ -186,43 +225,59 @@ FINANCIAL RISK:
 TOP ISSUES:
 {findings_text}
 
-Write a 3-4 sentence SCARY executive summary. Be direct and create urgency.
+Write a 3-4 sentence SCARY executive summary. Be direct and create urgency. Mention the Batch Size explicitly if provided.
 Do NOT use bullet points. Write in prose. Be dramatic but factual."""
 
         # Try LLM
         result = self._try_generate(prompt)
         if result:
-            return result
-        
+            return result, False
+            
         # Fallback to template
-        return self._generate_fallback(findings, financial_risk)
+        return self._generate_fallback(findings, financial_risk, batch_id, batch_size), True
     
-    def _generate_fallback(self, findings: List[dict], financial_risk: dict) -> str:
+    def _generate_fallback(self, findings: List[dict], financial_risk: dict, batch_id: int = None, batch_size: int = None) -> str:
         """Template-based narrative when LLM is unavailable."""
+        import random
+        
+        context = f"in Batch #{batch_id} ({batch_size} records)" if batch_id else "in this audit"
+        
         p0_count = len([f for f in findings if f.get('priority') == 'P0'])
         p1_count = len([f for f in findings if f.get('priority') == 'P1'])
         
-        if p0_count > 0:
-            severity = "CRITICAL"
-            urgency = "immediate executive attention"
-        elif p1_count > 0:
-            severity = "HIGH RISK"
-            urgency = "urgent remediation"
-        else:
-            severity = "MODERATE"
-            urgency = "scheduled review"
+        # Dynamic vocab
+        openers = [
+            "This account is hemorrhaging money due to invisible tracking failures.",
+            "Immediate intervention required: Critical signal loss is draining budget.",
+            "We are seeing a catastrophic disconnect between spend and measurement.",
+            "Audit reveals severe data governance gaps that are killing ROI.",
+            "Blind spots in the tracking setup are causing significant waste."
+        ]
         
-        return f"""{severity} ACCOUNT HEALTH ALERT: This account is hemorrhaging money due to invisible tracking failures. 
-
-Our audit identified {p0_count} critical and {p1_count} high-priority issues that are actively degrading campaign performance. With ${financial_risk['daily_spend_at_risk']:,.2f} in daily spend at risk, the monthly exposure reaches ${financial_risk['monthly_risk']:,.2f}.
-
-The bidding algorithms are optimizing towards broken signals, effectively spending budget on ghost conversions. Every hour of inaction compounds the waste. This requires {urgency}."""
+        middles = [
+            f"Our audit {context} identified {p0_count} critical and {p1_count} high-priority issues that are actively degrading campaign performance.",
+            f"We found {p0_count} P0 blockers and {p1_count} P1 warnings. These are not false alarms.",
+            f"With {p0_count + p1_count} confirmed tracking failures, the bidding strategy is effectively flying blind.",
+            f"The system detected {p0_count} critical breakages. This is impacting ${financial_risk['daily_spend_at_risk']:,.2f} of daily spend."
+        ]
+        
+        closers = [
+            "The bidding algorithms are optimizing towards broken signals, effectively spending budget on ghost conversions.",
+            "Every hour of inaction compounds the waste. This requires urgent remediation.",
+            "You are paying premium CPMs for broken data. Fix this immediately.",
+            "This is a P0 emergency. Pause optimization until tracking is restored."
+        ]
+        
+        severity = "CRITICAL" if p0_count > 0 else "HIGH RISK"
+        
+        return f"{severity} ALERT: {random.choice(openers)}\n\n{random.choice(middles)} With ${financial_risk['daily_spend_at_risk']:,.2f} in daily spend at risk, the monthly exposure reaches ${financial_risk['monthly_risk']:,.2f}.\n\n{random.choice(closers)}"
     
-    def analyze(self, findings: List[dict], total_records: int = 1000) -> Generator[dict, None, None]:
+    def analyze(self, findings: List[dict], batch_id: int = None, batch_size: int = None, total_records: int = 1000) -> Generator[dict, None, None]:
         """Analyze findings and generate CFO report."""
         self.reasoning_steps = []
         
-        yield self._log_step("💰 CFO Agent analyzing financial impact...")
+        batch_context = f" (Batch #{batch_id}, {batch_size} records)" if batch_id else ""
+        yield self._log_step(f"💰 CFO Agent analyzing financial impact{batch_context}...")
         
         yield self._log_step("📊 Calculating total spend at risk...")
         financial_risk = self._calculate_financial_risk(findings)
@@ -238,11 +293,17 @@ The bidding algorithms are optimizing towards broken signals, effectively spendi
         # Check if LLM is available
         self._ensure_initialized()
         if self.client and self.model:
-            yield self._log_step(f"   🤖 Using Gemini AI ({self.model})...")
+            title = "Groq Llama 3" if self.client_type == "groq" else f"Gemini AI ({self.model})"
+            yield self._log_step(f"   🤖 Using {title}...")
         else:
             yield self._log_step("   📝 Using template narrative...")
         
-        narrative = self._generate_narrative(findings, financial_risk)
+        narrative, used_fallback = self._generate_narrative(findings, financial_risk, batch_id, batch_size)
+        
+        if used_fallback and self.client:
+             yield self._log_step(f"   ⚠️ Connection to LLM failed. Switched to Pseudo Rules Engine.")
+        elif not used_fallback:
+             yield self._log_step(f"   ✅ Generated narrative via {self.model}.")
         
         yield self._log_step("✅ CFO Agent analysis complete.")
         
@@ -252,6 +313,8 @@ The bidding algorithms are optimizing towards broken signals, effectively spendi
                 "health_score": health_score,
                 "financial_risk": financial_risk,
                 "executive_narrative": narrative,
+                "batch_id": batch_id,
+                "batch_size": batch_size,
                 "total_findings": len(findings),
                 "p0_count": len([f for f in findings if f.get('priority') == 'P0']),
                 "p1_count": len([f for f in findings if f.get('priority') == 'P1']),
