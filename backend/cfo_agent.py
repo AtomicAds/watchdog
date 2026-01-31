@@ -84,26 +84,30 @@ class CFOAgent:
                 self.model = None
     
     def _find_best_model(self) -> str:
-        """Find the best available model by testing each one."""
+        """Return the preferred model name. Actual testing happens at generation time."""
+        # Don't test during init - just return preferred model
+        # This avoids blocking app startup
+        return PREFERRED_MODELS[0] if PREFERRED_MODELS else None
+    
+    def _try_generate_with_fallback(self, prompt: str) -> str:
+        """Try to generate content, falling back through models if needed."""
         if not self.client:
             return None
         
         for model_name in PREFERRED_MODELS:
             try:
-                # Quick test to see if model works
                 response = self.client.models.generate_content(
                     model=model_name,
-                    contents="Hi"
+                    contents=prompt
                 )
                 if response and response.text:
-                    print(f"Using model: {model_name}")
-                    return model_name
+                    self.model = model_name  # Update to working model
+                    return response.text.strip()
             except Exception as e:
                 # Model not available or rate limited, try next
                 continue
         
-        # No model worked, return default (will use fallback narrative)
-        print("Warning: No Gemini model available, using template narrative")
+        # No model worked
         return None
     
     def _log_step(self, step: str) -> dict:
@@ -215,12 +219,11 @@ Do NOT use bullet points. Write in prose. Be dramatic but factual."""
 
         try:
             if GEMINI_NEW_API and self.client:
-                # New google-genai API
-                response = self.client.models.generate_content(
-                    model=self.model,
-                    contents=prompt
-                )
-                return response.text.strip()
+                # New google-genai API with automatic fallback through models
+                result = self._try_generate_with_fallback(prompt)
+                if result:
+                    return result
+                return self._generate_fallback_narrative(findings, financial_risk)
             elif self.model:
                 # Old deprecated API
                 response = self.model.generate_content(prompt)
