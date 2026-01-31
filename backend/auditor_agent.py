@@ -17,6 +17,7 @@ import pandas as pd
 from datetime import datetime
 from pathlib import Path
 from typing import Generator
+import time
 
 
 class AuditorAgent:
@@ -54,9 +55,9 @@ class AuditorAgent:
         self.reasoning_steps.append(log_entry)
         return log_entry
     
-    def run_audit(self, limit: int = None) -> Generator[dict, None, None]:
+    def run_audit(self, limit: int = None, batch_size: int = 20) -> Generator[dict, None, None]:
         """
-        Run the full governance audit.
+        Run the full governance audit in batches.
         Yields findings as they are discovered (for streaming).
         """
         self.findings = []
@@ -64,54 +65,59 @@ class AuditorAgent:
         data = self._load_data()
         
         yield self._log_step("📋 Auditor Agent starting governance audit...")
-        yield self._log_step(f"📊 Loaded {len(data['ga4'])} GA4 records")
         
         ga4_df = data['ga4']
         gtm_df = data['gtm']
         
         if limit:
             ga4_df = ga4_df.head(limit)
+            
+        yield self._log_step(f"📊 Loaded {len(ga4_df)} GA4 records to analyze in batches of {batch_size}")
         
-        # Check 1: PII in URLs
-        yield self._log_step("🔎 CHECK 1: Scanning for PII (emails, phone numbers) in URL parameters...")
-        for finding in self._check_pii_in_urls(ga4_df):
-            yield finding
+        total_batches = (len(ga4_df) + batch_size - 1) // batch_size
         
-        # Check 2: Data Retention Settings
-        yield self._log_step("🔎 CHECK 2: Verifying data retention is set to 14 months...")
-        for finding in self._check_data_retention(ga4_df):
-            yield finding
+        for batch_idx in range(total_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = start_idx + batch_size
+            
+            current_batch = ga4_df.iloc[start_idx:end_idx]
+            
+            yield {
+                "type": "batch_start", 
+                "agent": "Auditor",
+                "batch_id": batch_idx + 1, 
+                "total_batches": total_batches,
+                "size": len(current_batch)
+            }
+            yield self._log_step(f"📦 Processing Audit Batch {batch_idx + 1}/{total_batches} ({len(current_batch)} records)...")
         
-        # Check 3: Google Signals
-        yield self._log_step("🔎 CHECK 3: Checking if Google Signals is enabled...")
-        for finding in self._check_google_signals(ga4_df):
-            yield finding
-        
-        # Check 4: Enhanced Measurement
-        yield self._log_step("🔎 CHECK 4: Verifying Enhanced Measurement configuration...")
-        for finding in self._check_enhanced_measurement(ga4_df):
-            yield finding
-        
-        # Check 5: Campaign Naming Conventions
-        yield self._log_step("🔎 CHECK 5: Validating campaign naming conventions (snake_case)...")
-        for finding in self._check_campaign_naming(ga4_df):
-            yield finding
-        
-        # Check 6: Referral Exclusion List
-        yield self._log_step("🔎 CHECK 6: Checking referral exclusion list for payment gateways...")
-        for finding in self._check_referral_exclusions(ga4_df):
-            yield finding
-        
-        # Check 7: Consent Mode Status
-        yield self._log_step("🔎 CHECK 7: Verifying Consent Mode configuration...")
-        for finding in self._check_consent_mode(ga4_df):
-            yield finding
-        
-        # Check 8: Cost Data Import
-        yield self._log_step("🔎 CHECK 8: Checking Cost Data Import status...")
-        for finding in self._check_cost_data_import(ga4_df):
-            yield finding
-        
+            # Check 1: PII in URLs
+            for finding in self._check_pii_in_urls(current_batch): yield finding
+            
+            # Check 2: Data Retention Settings
+            for finding in self._check_data_retention(current_batch): yield finding
+            
+            # Check 3: Google Signals
+            for finding in self._check_google_signals(current_batch): yield finding
+            
+            # Check 4: Enhanced Measurement
+            for finding in self._check_enhanced_measurement(current_batch): yield finding
+            
+            # Check 5: Campaign Naming Conventions
+            for finding in self._check_campaign_naming(current_batch): yield finding
+            
+            # Check 6: Referral Exclusion List
+            for finding in self._check_referral_exclusions(current_batch): yield finding
+            
+            # Check 7: Consent Mode Status
+            for finding in self._check_consent_mode(current_batch): yield finding
+            
+            # Check 8: Cost Data Import
+            for finding in self._check_cost_data_import(current_batch): yield finding
+            
+            yield {"type": "batch_complete", "batch_id": batch_idx + 1}
+            time.sleep(0.5) # Simulate batch processing latency
+            
         yield self._log_step(f"✅ Auditor Agent completed. Found {len(self.findings)} governance issues.")
     
     def _check_pii_in_urls(self, ga4_df: pd.DataFrame) -> Generator[dict, None, None]:

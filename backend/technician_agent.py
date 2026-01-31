@@ -54,63 +54,77 @@ class TechnicianAgent:
         self.reasoning_steps.append(log_entry)
         return log_entry
     
-    def run_audit(self, limit: int = None) -> Generator[dict, None, None]:
+    def run_audit(self, limit: int = None, batch_size: int = 20) -> Generator[dict, None, None]:
         """
-        Run the full audit using the decision tree logic.
-        Yields findings as they are discovered (for streaming).
+        Run the full audit using the decision tree logic in batches to simulate live stream.
+        Yields findings as they are discovered.
         """
         self.findings = []
         self.reasoning_steps = []
         data = self._load_data()
         
         yield self._log_step("🔍 Technician Agent starting audit...")
-        yield self._log_step(f"📊 Loaded {len(data['dv360'])} DV360 records, {len(data['gtm'])} GTM tags")
         
         dv360_df = data['dv360']
-        gtm_df = data['gtm']
+        gtm_df = data['gtm'] # Reference data (static)
         website_df = data['website']
         ga4_df = data['ga4']
         
         if limit:
             dv360_df = dv360_df.head(limit)
+            website_df = website_df.head(limit)
+
+        yield self._log_step(f"📊 Loaded {len(dv360_df)} DV360 records to analyze in batches of {batch_size}")
+
+        # Create batches
+        # We drive the main loop with DV360 data as "the stream"
+        total_batches = (len(dv360_df) + batch_size - 1) // batch_size
         
-        # Check 1: Pixel Created?
-        yield self._log_step("🔎 CHECK 1: Verifying pixels are created (Floodlight_Activity_ID exists)...")
-        for finding in self._check_pixel_created(dv360_df):
-            yield finding
+        for batch_idx in range(total_batches):
+            start_idx = batch_idx * batch_size
+            end_idx = start_idx + batch_size
+            
+            # Slice the dataframes to simulate a "batch" of new data arriving
+            current_dv360_batch = dv360_df.iloc[start_idx:end_idx]
+            current_website_batch = website_df.iloc[start_idx:end_idx] if start_idx < len(website_df) else pd.DataFrame()
+            
+            yield {
+                "type": "batch_start", 
+                "agent": "Technician",
+                "batch_id": batch_idx + 1, 
+                "total_batches": total_batches,
+                "size": len(current_dv360_batch)
+            }
+            yield self._log_step(f"📦 Processing Batch {batch_idx + 1}/{total_batches} ({len(current_dv360_batch)} records)...")
         
-        # Check 2: Pixel Firing?
-        yield self._log_step("🔎 CHECK 2: Verifying pixels are firing (recent conversions, cookie consent)...")
-        for finding in self._check_pixel_firing(dv360_df):
-            yield finding
-        
-        # Check 3: GTM Linked and IDs Match?
-        yield self._log_step("🔎 CHECK 3: Verifying GTM linkage and Advertiser ID matching...")
-        for finding in self._check_gtm_linkage(dv360_df, gtm_df):
-            yield finding
-        
-        # Check 4: Counting Methods Match?
-        yield self._log_step("🔎 CHECK 4: Verifying counting methods match between DV360 and GTM...")
-        for finding in self._check_counting_methods(dv360_df, gtm_df):
-            yield finding
-        
-        # Check 5: Network Calls Blocked?
-        yield self._log_step("🔎 CHECK 5: Checking for blocked network calls on websites...")
-        for finding in self._check_network_blocked(website_df):
-            yield finding
-        
-        # Check 6: Consent Settings?
-        yield self._log_step("🔎 CHECK 6: Verifying consent settings in GTM...")
+            # Check 1: Pixel Created?
+            for finding in self._check_pixel_created(current_dv360_batch): yield finding
+            
+            # Check 2: Pixel Firing?
+            for finding in self._check_pixel_firing(current_dv360_batch): yield finding
+            
+            # Check 3: GTM Linked?
+            for finding in self._check_gtm_linkage(current_dv360_batch, gtm_df): yield finding
+            
+            # Check 4: Counting Methods?
+            for finding in self._check_counting_methods(current_dv360_batch, gtm_df): yield finding
+            
+            # Check 5: Network Calls Blocked?
+            if not current_website_batch.empty:
+               for finding in self._check_network_blocked(current_website_batch): yield finding
+
+            # Check 7: GA4 Data Discrepancy? (Moved inside loop)
+            for finding in self._check_ga4_discrepancy(current_dv360_batch, ga4_df): yield finding
+            
+            yield {"type": "batch_complete", "batch_id": batch_idx + 1}
+            time.sleep(0.5)
+            
+        # Check 6: Consent Settings? (Static Check)
+        yield self._log_step("🔎 CHECK 6: Verifying consent settings in GTM (Static Config)...")
         for finding in self._check_consent_settings(gtm_df):
             yield finding
         
-        # Check 7: GA4 Data Discrepancy?
-        yield self._log_step("🔎 CHECK 7: Checking for DV360 vs GA4 data discrepancies...")
-        for finding in self._check_ga4_discrepancy(dv360_df, ga4_df):
-            yield finding
-        
         yield self._log_step(f"✅ Technician Agent completed. Found {len(self.findings)} issues.")
-    
     def _check_pixel_created(self, dv360_df: pd.DataFrame) -> Generator[dict, None, None]:
         """Check if Floodlight pixels are created (not nan)."""
         missing_pixels = dv360_df[dv360_df['Floodlight_Activity_ID'].isna() | 

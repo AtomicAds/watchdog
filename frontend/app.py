@@ -160,22 +160,22 @@ def display_finding(finding: dict):
 
 
 def run_audit_with_streaming(limit: int = 100):
-    """Run the audit with streaming display."""
+    """Run the audit with continuous streaming display."""
     
     # Load agents (lazy loading)
     load_agents()
     
-    # Initialize session state for results
+    # Initialize session state for persistent tracking across re-runs
     if 'findings' not in st.session_state:
         st.session_state.findings = []
-    if 'reasoning_log' not in st.session_state:
-        st.session_state.reasoning_log = []
+    if 'logs' not in st.session_state:
+        st.session_state.logs = []
     
     # Create layout
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.subheader("🔍 Agent Reasoning (Live)")
+        st.subheader("🔍 Agent Reasoning (Live Stream)")
         log_container = st.empty()
         
     with col2:
@@ -184,7 +184,7 @@ def run_audit_with_streaming(limit: int = 100):
     
     st.divider()
     
-    findings_header = st.empty()
+    # Container for live findings
     findings_container = st.container()
     
     # Initialize agents
@@ -192,81 +192,106 @@ def run_audit_with_streaming(limit: int = 100):
     auditor = AuditorAgent()
     cfo = CFOAgent()
     
-    all_findings = []
-    all_logs = []
+    def update_logs(message: str):
+        """Append log and handle rolling window."""
+        st.session_state.logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {message}")
+        # Keep last 100 logs
+        if len(st.session_state.logs) > 100:
+            st.session_state.logs.pop(0)
+        log_container.markdown(f"<div class='agent-log'>{'<br>'.join(st.session_state.logs[-20:])}</div>", unsafe_allow_html=True)
+
+    def update_stats(findings_list):
+        p0 = len([f for f in findings_list if f.get('priority') == 'P0'])
+        p1 = len([f for f in findings_list if f.get('priority') == 'P1'])
+        p2 = len([f for f in findings_list if f.get('priority') == 'P2'])
+        stats_container.markdown(f"""
+        **Total Findings:** {len(findings_list)}  
+        🔴 P0 Critical: {p0}  
+        🟡 P1 High: {p1}  
+        🟢 P2 Medium: {p2}
+        """)
+
+    update_logs("🚀 Entering Continuous Interleaved Mode...")
+    progress_bar = st.progress(0, text="Initializing Agents...")
     
-    # Run Technician Agent
-    all_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 🤖 Starting Technician Agent...")
-    log_container.markdown(f"<div class='agent-log'>{'<br>'.join(all_logs[-20:])}</div>", unsafe_allow_html=True)
+    # Generators
+    tech_gen = technician.run_audit(limit=limit, batch_size=5)
+    audit_gen = auditor.run_audit(limit=limit, batch_size=5)
     
-    for event in technician.run_audit(limit=limit):
-        if event.get("type") == "finding":
-            all_findings.append(event["data"])
-            # Update stats
-            p0 = len([f for f in all_findings if f.get('priority') == 'P0'])
-            p1 = len([f for f in all_findings if f.get('priority') == 'P1'])
-            p2 = len([f for f in all_findings if f.get('priority') == 'P2'])
-            stats_container.markdown(f"""
-            **Findings:** {len(all_findings)}  
-            🔴 P0 Critical: {p0}  
-            🟡 P1 High: {p1}  
-            🟢 P2 Medium: {p2}
-            """)
-        else:
-            step = event.get('step', '')
-            if step:
-                all_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {step}")
-                log_container.markdown(f"<div class='agent-log'>{'<br>'.join(all_logs[-20:])}</div>", unsafe_allow_html=True)
-        time.sleep(0.02)  # Small delay for visual effect
+    # Infinite Interleaved Loop
+    cycle_count = 1
     
-    # Run Auditor Agent
-    all_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 📋 Starting Auditor Agent...")
-    log_container.markdown(f"<div class='agent-log'>{'<br>'.join(all_logs[-20:])}</div>", unsafe_allow_html=True)
-    
-    for event in auditor.run_audit(limit=limit):
-        if event.get("type") == "finding":
-            all_findings.append(event["data"])
-            # Update stats
-            p0 = len([f for f in all_findings if f.get('priority') == 'P0'])
-            p1 = len([f for f in all_findings if f.get('priority') == 'P1'])
-            p2 = len([f for f in all_findings if f.get('priority') == 'P2'])
-            stats_container.markdown(f"""
-            **Findings:** {len(all_findings)}  
-            🔴 P0 Critical: {p0}  
-            🟡 P1 High: {p1}  
-            🟢 P2 Medium: {p2}
-            """)
-        else:
-            step = event.get('step', '')
-            if step:
-                all_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {step}")
-                log_container.markdown(f"<div class='agent-log'>{'<br>'.join(all_logs[-20:])}</div>", unsafe_allow_html=True)
-        time.sleep(0.02)
-    
-    # Run CFO Agent
-    all_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] 💰 Starting CFO Agent...")
-    log_container.markdown(f"<div class='agent-log'>{'<br>'.join(all_logs[-20:])}</div>", unsafe_allow_html=True)
-    
-    cfo_report = None
-    for event in cfo.analyze(all_findings):
-        if event.get("type") == "cfo_report":
-            cfo_report = event["data"]
-        else:
-            step = event.get('step', '')
-            if step:
-                all_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] {step}")
-                log_container.markdown(f"<div class='agent-log'>{'<br>'.join(all_logs[-20:])}</div>", unsafe_allow_html=True)
-        time.sleep(0.02)
-    
-    all_logs.append(f"[{datetime.now().strftime('%H:%M:%S')}] ✅ Audit Complete!")
-    log_container.markdown(f"<div class='agent-log'>{'<br>'.join(all_logs[-20:])}</div>", unsafe_allow_html=True)
-    
-    # Store results in session state
-    st.session_state.findings = all_findings
-    st.session_state.cfo_report = cfo_report
-    st.session_state.logs = all_logs
-    
-    return all_findings, cfo_report
+    while True:
+        # --- Technician Agent Turn ---
+        try:
+            while True:
+                event = next(tech_gen)
+                event_type = event.get("type")
+                
+                if event_type == "finding":
+                    st.session_state.findings.insert(0, event["data"]) # Add to top
+                    # Display finding if P0 or P1
+                    if event["data"].get("priority") in ["P0", "P1"]:
+                        with findings_container:
+                            display_finding(event["data"])
+                
+                elif event_type == "batch_start":
+                    bid = event.get("batch_id")
+                    tot = event.get("total_batches")
+                    progress_bar.progress(bid / tot, text=f"🔧 Technician: Analyzing Batch {bid}/{tot}...")
+                
+                elif event.get("step"):
+                    update_logs(event["step"])
+                
+                elif event_type == "batch_complete":
+                     # Switch to Auditor after one batch
+                     break
+                     
+                time.sleep(0.05)
+                
+        except StopIteration:
+            update_logs(f"Note: Technician Agent completed cycle {cycle_count}. Restarting stream...")
+            tech_gen = technician.run_audit(limit=limit, batch_size=5)
+            time.sleep(0.5)
+        
+        # --- Auditor Agent Turn ---
+        try:
+             while True:
+                event = next(audit_gen)
+                event_type = event.get("type")
+                
+                if event_type == "finding":
+                    st.session_state.findings.insert(0, event["data"])
+                    if event["data"].get("priority") in ["P0", "P1"]:
+                        with findings_container:
+                            display_finding(event["data"])
+
+                elif event_type == "batch_start":
+                    bid = event.get("batch_id")
+                    tot = event.get("total_batches")
+                    progress_bar.progress(bid / tot, text=f"📋 Auditor: Analyzing Batch {bid}/{tot}...")
+                
+                elif event.get("step"):
+                    update_logs(event["step"])
+                    
+                elif event_type == "batch_complete":
+                     break
+                     
+                time.sleep(0.05)
+        
+        except StopIteration:
+            update_logs(f"Note: Auditor Agent completed cycle {cycle_count}. Restarting stream...")
+            audit_gen = auditor.run_audit(limit=limit, batch_size=5)
+            cycle_count += 1
+            time.sleep(0.5)
+
+        # Update global stats
+        # Cap session state to 200 findings to prevent memory explosion
+        if len(st.session_state.findings) > 200:
+             st.session_state.findings = st.session_state.findings[:200]
+        
+        update_stats(st.session_state.findings)
+        time.sleep(0.1)
 
 
 def main():
